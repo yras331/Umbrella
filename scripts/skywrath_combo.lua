@@ -25,15 +25,37 @@ local DEFAULT_ORDER = {
 	"Mystic Flare",
 }
 
+local ORDER_ITEMS = {
+	"Concussive Shot",
+	"Sheep Stick",
+	"Rod of Atos",
+	"Ancient Seal",
+	"Ethereal Blade",
+	"Arcane Bolt",
+	"Dagon",
+	"Mystic Flare",
+}
+
 local available_spells = {
-	{nameId = "Concussive Shot", imagePath = "", isEnabled = true},
-	{nameId = "Sheep Stick", imagePath = "", isEnabled = true},
-	{nameId = "Rod of Atos", imagePath = "", isEnabled = true},
-	{nameId = "Ancient Seal", imagePath = "", isEnabled = true},
-	{nameId = "Ethereal Blade", imagePath = "", isEnabled = true},
-	{nameId = "Arcane Bolt", imagePath = "", isEnabled = true},
-	{nameId = "Dagon", imagePath = "", isEnabled = true},
-	{nameId = "Mystic Flare", imagePath = "", isEnabled = true},
+	{nameId = "Concussive Shot", imagePath = "images/MenuIcons/target.png", isEnabled = true},
+	{nameId = "Sheep Stick", imagePath = "images/MenuIcons/staff_stick.png", isEnabled = true},
+	{nameId = "Rod of Atos", imagePath = "images/MenuIcons/Dota/gungir.png", isEnabled = true},
+	{nameId = "Ancient Seal", imagePath = "images/MenuIcons/silent.png", isEnabled = true},
+	{nameId = "Ethereal Blade", imagePath = "images/MenuIcons/Dota/ethereal_blade.png", isEnabled = true},
+	{nameId = "Arcane Bolt", imagePath = "images/MenuIcons/magic_ball.png", isEnabled = true},
+	{nameId = "Dagon", imagePath = "images/MenuIcons/Dota/dagon.png", isEnabled = true},
+	{nameId = "Mystic Flare", imagePath = "images/MenuIcons/explosion.png", isEnabled = true},
+}
+
+local ICON_BY_NAME = {
+	["Concussive Shot"] = "images/MenuIcons/target.png",
+	["Sheep Stick"] = "images/MenuIcons/staff_stick.png",
+	["Rod of Atos"] = "images/MenuIcons/Dota/gungir.png",
+	["Ancient Seal"] = "images/MenuIcons/silent.png",
+	["Ethereal Blade"] = "images/MenuIcons/Dota/ethereal_blade.png",
+	["Arcane Bolt"] = "images/MenuIcons/magic_ball.png",
+	["Dagon"] = "images/MenuIcons/Dota/dagon.png",
+	["Mystic Flare"] = "images/MenuIcons/explosion.png",
 }
 
 local spell_map = {
@@ -75,6 +97,24 @@ local function log_info(msg)
 	end
 end
 
+local LOCK_LINE_COLOR = Color(0, 255, 120, 220)
+local LOCK_LINE_THICKNESS = 2.0
+
+local function draw_lock_line(hero, target)
+	if not hero or not target then return end
+	if not Render or not Render.WorldToScreen or not Render.Line then return end
+	local hero_pos = Entity.GetAbsOrigin(hero)
+	local target_pos = Entity.GetAbsOrigin(target)
+	-- lift endpoints slightly so the line doesn't end at feet
+	hero_pos = Vector(hero_pos.x, hero_pos.y, (hero_pos.z or 0.0) + 80.0)
+	target_pos = Vector(target_pos.x, target_pos.y, (target_pos.z or 0.0) + 80.0)
+
+	local a, a_vis = Render.WorldToScreen(hero_pos)
+	local b, b_vis = Render.WorldToScreen(target_pos)
+	if not a_vis or not b_vis then return end
+	Render.Line(a, b, LOCK_LINE_COLOR, LOCK_LINE_THICKNESS)
+end
+
 local function get_local_player()
 	if Players and Players.GetLocal then return Players.GetLocal() end
 	return nil
@@ -110,10 +150,28 @@ for i = 0, 200 do
 end
 ui.flare_offset_minus = main_group:Combo("Mystic Flare Offset Minus", flare_minus_labels, 10)
 
-ui.combo_order = order_group:MultiSelect("Combo Order (Drag to Reorder)", available_spells, true)
-ui.combo_order:DragAllowed(true)
-if ui.combo_order and ui.combo_order.Set then
-	ui.combo_order:Set(DEFAULT_ORDER)
+-- Fallback ordering UI: per-step dropdowns (always renders on all builds).
+ui.order_steps = {}
+for i = 1, #ORDER_ITEMS do
+	ui.order_steps[i] = order_group:Combo("Step " .. tostring(i), ORDER_ITEMS, i - 1)
+	if ui.order_steps[i] and ui.order_steps[i].Image then
+		pcall(ui.order_steps[i].Image, ui.order_steps[i], ICON_BY_NAME[ORDER_ITEMS[i]] or "")
+	end
+end
+
+local last_icon_update_t = 0.0
+local function update_step_icons()
+	local t = now_time()
+	if (t - last_icon_update_t) < 0.20 then return end
+	last_icon_update_t = t
+	for i = 1, #ui.order_steps do
+		local w = ui.order_steps[i]
+		if w and w.Get and w.Image then
+			local idx = w:Get()
+			local name = ORDER_ITEMS[(idx or 0) + 1]
+			pcall(w.Image, w, ICON_BY_NAME[name] or "")
+		end
+	end
 end
 
 local function normalize_list(v)
@@ -122,9 +180,19 @@ local function normalize_list(v)
 end
 
 local function get_order_list()
-	local list = normalize_list(ui.combo_order:List())
-	if #list == 0 then return DEFAULT_ORDER end
-	return list
+	if ui.order_steps and #ui.order_steps > 0 then
+		local list = {}
+		for i = 1, #ui.order_steps do
+			local w = ui.order_steps[i]
+			if w and w.Get then
+				local idx = w:Get()
+				local name = ORDER_ITEMS[(idx or 0) + 1]
+				if name then list[#list + 1] = name end
+			end
+		end
+		if #list > 0 then return list end
+	end
+	return DEFAULT_ORDER
 end
 
 local function build_combo_sequence()
@@ -447,7 +515,7 @@ local function step_combo()
 		return STEP_BLOCKED
 	end
 
-	-- If we previously issued a cast, wait until it actually goes on cooldown before advancing.
+	-- If we previously issued a cast, wait until it actually goes on cooldown before attempting anything else.
 	if pending_ability then
 		local t = now_time()
 		if pending_is_confirmed() then
@@ -456,8 +524,7 @@ local function step_combo()
 			pending_step = 0
 			pending_name = nil
 			pending_start_t = 0.0
-			combo_idx = combo_idx + 1
-			return STEP_SKIPPED -- advance without consuming a cast slot this frame
+			return STEP_SKIPPED -- clear pending; allow searching next frame
 		end
 		if (t - pending_start_t) >= PENDING_TIMEOUT then
 			log_debug("No cooldown detected for step " .. tostring(pending_step) .. ": " .. tostring(pending_name) .. " (retry)")
@@ -475,10 +542,7 @@ local function step_combo()
 		reset_combo()
 		return STEP_BLOCKED
 	end
-	if combo_idx > #combo_seq then
-		reset_combo()
-		return STEP_BLOCKED
-	end
+	-- Always prioritize earliest step that is currently ready.
 
 	-- Before starting the combo (and while running), ensure we're in range for the *shortest* range step.
 	if desired_min_range <= 0.0 then
@@ -499,47 +563,71 @@ local function step_combo()
 		end
 	end
 
-	local spell = combo_seq[combo_idx]
-	local ability = get_spell(hero, spell)
-	-- If missing or not castable now, skip instantly.
-	if not ability then
-		log_debug("Skip step " .. tostring(combo_idx) .. ": missing " .. tostring(spell.name))
-		combo_idx = combo_idx + 1
-		return STEP_SKIPPED
-	end
-	local ok, reason = cast_fast(ability, spell, combo_target)
-	if ok then
-		log_debug("Cast step " .. tostring(combo_idx) .. ": " .. tostring(spell.name) .. " (waiting cooldown)")
-		pending_ability = ability
-		pending_step = combo_idx
-		pending_name = spell.name
-		pending_start_t = now_time()
-		return STEP_CAST
-	end
-	if reason == "out_of_range" then
-		issue_move_to_target(hero, combo_target)
-	end
+	for i = 1, #combo_seq do
+		local spell = combo_seq[i]
+		local ability = get_spell(hero, spell)
+		if not ability then
+			-- Missing items/spells are skipped.
+			if ui.debug_logs:Get() then
+				local t = now_time()
+				if last_fail_reason ~= "missing" or last_fail_step ~= i or (t - last_fail_log_t) >= FAIL_LOG_COOLDOWN then
+					last_fail_reason = "missing"
+					last_fail_step = i
+					last_fail_log_t = t
+					log_debug("Skip step " .. tostring(i) .. ": missing " .. tostring(spell.name))
+				end
+			end
+		else
+			local ok, reason = cast_fast(ability, spell, combo_target)
+			if ok then
+				log_debug("Cast step " .. tostring(i) .. ": " .. tostring(spell.name) .. " (waiting cooldown)")
+				pending_ability = ability
+				pending_step = i
+				pending_name = spell.name
+				pending_start_t = now_time()
+				combo_idx = i
+				return STEP_CAST
+			end
 
-	local t = now_time()
-	-- Rate-limit repeated fail logs for the same step+reason.
-	if ui.debug_logs:Get() then
-		local step = combo_idx
-		if reason ~= last_fail_reason or step ~= last_fail_step or (t - last_fail_log_t) >= FAIL_LOG_COOLDOWN then
-			last_fail_reason = reason
-			last_fail_step = step
-			last_fail_log_t = t
-			log_debug(
-				"Fail step " .. tostring(step) .. ": " .. tostring(spell.name) .. " => " .. tostring(reason)
-			)
+			-- Cooldown = skip and keep trying later steps.
+			if reason == "not_ready" then
+				if ui.debug_logs:Get() then
+					local t = now_time()
+					if reason ~= last_fail_reason or last_fail_step ~= i or (t - last_fail_log_t) >= FAIL_LOG_COOLDOWN then
+						last_fail_reason = reason
+						last_fail_step = i
+						last_fail_log_t = t
+						log_debug("Skip step " .. tostring(i) .. ": " .. tostring(spell.name) .. " => not_ready")
+					end
+				end
+			else
+				-- Out of range = move and block.
+				if reason == "out_of_range" then
+					issue_move_to_target(hero, combo_target)
+					return STEP_BLOCKED
+				end
+
+				-- Other failures (mana/silence/etc) block.
+				if ui.debug_logs:Get() then
+					local t = now_time()
+					if reason ~= last_fail_reason or last_fail_step ~= i or (t - last_fail_log_t) >= FAIL_LOG_COOLDOWN then
+						last_fail_reason = reason
+						last_fail_step = i
+						last_fail_log_t = t
+						log_debug("Fail step " .. tostring(i) .. ": " .. tostring(spell.name) .. " => " .. tostring(reason))
+					end
+				end
+				return STEP_BLOCKED
+			end
 		end
 	end
 
-	-- Don't advance unless the cast actually goes off.
 	return STEP_BLOCKED
 end
 
 function combo.OnUpdate()
 	if not ui.enabled:Get() then return end
+	update_step_icons()
 	local key = ui.combo_key:Get()
 	if key == Enum.ButtonCode.BUTTON_CODE_INVALID then return end
 
@@ -594,6 +682,19 @@ function combo.OnUpdate()
 	end
 
 	was_key_down = true
+end
+
+function combo.OnDraw()
+	if not ui.enabled:Get() then return end
+	local key = ui.combo_key:Get()
+	if key == Enum.ButtonCode.BUTTON_CODE_INVALID then return end
+	if not Input.IsKeyDown(key) then return end
+
+	local hero = Heroes.GetLocal()
+	if not hero then return end
+	if combo_target and Entity.IsAlive(combo_target) then
+		draw_lock_line(hero, combo_target)
+	end
 end
 
 return combo
