@@ -24,9 +24,6 @@ local CENTER_ICON_FADE_TIME = 0.3  -- seconds for fade out animation
 
 -- Smoke tracking
 local smoke_uses = {}  -- {pos = Vector, time = number, team = number}
-local last_check_time = 0
-local CHECK_INTERVAL = 0.1  -- check every 100ms
-local tracked_heroes_with_smoke = {}  -- Track which heroes we've seen with smoke modifier
 
 -- Particle tracking (best chance to detect out-of-vision if replicated)
 local tracked_particles = {} -- [index] = {fullName, name, created_t, entity, team, triggered, last_pos_by_cp = {}}
@@ -117,12 +114,6 @@ local function try_add_smoke_marker(pos, team, source)
 	})
 
 	Log.Write("[Smoke Detector] SMOKE DETECTED (" .. tostring(source or "?") .. ") at " .. tostring(pos))
-end
-
-local function check_for_smoke_usage()
-	-- Intentionally disabled.
-	-- Modifier/polling based checks can fire when a smoked hero becomes visible,
-	-- which is not the same thing as "smoke was used".
 end
 
 local function draw_minimap_circles()
@@ -225,53 +216,13 @@ local function draw_center_screen_icon()
 		-- If Render v2 isn't available, skip center alert silently.
 	end
 end
-
-function smoke_detector.OnUpdate()
-	if not ui.enabled:Get() then
-		return
-	end
-	-- No polling-based detection; particle callbacks only.
-end
-
 function smoke_detector.OnDraw()
 	if not ui.enabled:Get() then
 		return
 	end
 	
-	-- OnDraw is called every frame, don't spam logs
 	draw_minimap_circles()
 	draw_center_screen_icon()
-end
-
--- METHOD 4: Modifier create callback
-function smoke_detector.OnModifierCreate(entity, modifier)
-	if modifier then
-		local mod_name = Modifier.GetName(modifier)
-		-- Do not trigger smoke markers from modifiers.
-		-- Modifiers can be observed when a unit re-enters vision, which is too late.
-		local _ = mod_name
-	end
-end
-
--- METHOD 5: Modifier destroy callback
-function smoke_detector.OnModifierDestroy(entity, modifier)
-	if modifier then
-		local mod_name = Modifier.GetName(modifier)
-		local mod_name_l = normalize_str(mod_name)
-		if mod_name_l ~= "" and string.find(mod_name_l, "smoke") then
-			-- no-op
-		end
-	end
-end
-
--- METHOD 6: Fire event callback
-function smoke_detector.OnFireEventClient(data)
-	-- no-op
-end
-
--- METHOD 7: Inventory updated callback
-function smoke_detector.OnUnitInventoryUpdated(npc)
-	-- no-op
 end
 
 -- Particle-based detection
