@@ -256,6 +256,18 @@ local LINKENS_BREAKER_ITEMS = {
 	"Mystic Flare",
 }
 
+-- Linken's breaker priority list (only include direct target casts).
+local LINKENS_BREAK_ORDER_ITEMS = {
+	"Sheep Stick",
+	"Rod of Atos",
+	"Ancient Seal",
+	"Ethereal Blade",
+	"Bloodthorn",
+	"Nullifier",
+	"Arcane Bolt",
+	"Dagon",
+}
+
 local available_spells = {
 	{nameId = "Concussive Shot", imagePath = "images/MenuIcons/target.png", isEnabled = true},
 	{nameId = "Sheep Stick", imagePath = "images/MenuIcons/staff_stick.png", isEnabled = true},
@@ -299,6 +311,8 @@ local spell_map = {
 -- Combo Order UI: draggable icon list (this drives the actual combo order).
 local ORDER_UI_CONFIG_NAME = "skywrath_combo"
 local combo_order_enabled_names = nil -- cached {"Arcane Bolt", ...} in chosen order
+
+local linkens_break_enabled_names = nil -- cached {"Dagon", ...} in chosen priority order
 
 local function split_csv(s)
 	if type(s) ~= "string" or s == "" then return {} end
@@ -354,9 +368,29 @@ local function build_order_multiselect_items(order_list, enabled_set)
 	return items
 end
 
+local function build_linkens_break_multiselect_items(order_list, enabled_set)
+	local items = {}
+	local seen = {}
+	local function push(name_id)
+		if not name_id or seen[name_id] then return end
+		seen[name_id] = true
+		items[#items + 1] = { name_id, resolve_multiselect_image_path(name_id), enabled_set[name_id] == true }
+	end
+	if type(order_list) == "table" then
+		for _, name_id in ipairs(order_list) do
+			push(name_id)
+		end
+	end
+	for _, name_id in ipairs(LINKENS_BREAK_ORDER_ITEMS) do
+		push(name_id)
+	end
+	return items
+end
+
 local menu_tab = Menu.Create("General", "Scripts", "Skywrath Combo", "Combo")
 local main_group = menu_tab:Create("Settings")
 local order_group = menu_tab:Create("Combo Order")
+local linkens_group = menu_tab:Create("Linken's Breaker")
 
 ui = {}
 ui.enabled = main_group:Switch("Enable Combo", true)
@@ -566,10 +600,60 @@ end
 
 -- (Removed) Old Aghanim's overlap-tuning UI: "Mystic Flare Offset Minus".
 
+-- Linken's Breaker Priority (drag reorder).
+ui.linkens_breaker = {}
+do
+	local saved_order = ""
+	local saved_enabled = ""
+	if Config and Config.ReadString then
+		saved_order = Config.ReadString(ORDER_UI_CONFIG_NAME, "linkens_drag_order", "")
+		saved_enabled = Config.ReadString(ORDER_UI_CONFIG_NAME, "linkens_drag_enabled", "")
+	end
 
-ui.linkens_breaker = main_group:Combo("Linken's Breaker", LINKENS_BREAKER_ITEMS, 0)
-if ui.linkens_breaker and ui.linkens_breaker.Image then
-	pcall(ui.linkens_breaker.Image, ui.linkens_breaker, ICON_BY_NAME["None"] or "")
+	local saved_order_list = split_csv(saved_order)
+	if #saved_order_list == 0 then
+		saved_order_list = LINKENS_BREAK_ORDER_ITEMS
+	end
+
+	local enabled_default = split_csv(saved_enabled)
+	if #enabled_default == 0 then
+		enabled_default = LINKENS_BREAK_ORDER_ITEMS
+	end
+	local enabled_set = list_to_set(enabled_default)
+
+	linkens_group:Label("Drag to reorder. Toggle entries to enable/disable. First available breaker is used.")
+	local items = build_linkens_break_multiselect_items(saved_order_list, enabled_set)
+	ui.linkens_breaker.multiselect = linkens_group:MultiSelect("Breaker Priority", items, true)
+	if ui.linkens_breaker.multiselect and ui.linkens_breaker.multiselect.DragAllowed then
+		pcall(ui.linkens_breaker.multiselect.DragAllowed, ui.linkens_breaker.multiselect, true)
+	end
+
+	local function read_linkens_breaker(save_to_config)
+		if not ui.linkens_breaker.multiselect or not ui.linkens_breaker.multiselect.List or not ui.linkens_breaker.multiselect.Get then
+			return
+		end
+		local ok_list, ids = pcall(ui.linkens_breaker.multiselect.List, ui.linkens_breaker.multiselect)
+		if not ok_list or type(ids) ~= "table" then return end
+		local enabled = {}
+		for _, id in ipairs(ids) do
+			local ok_get, is_on = pcall(ui.linkens_breaker.multiselect.Get, ui.linkens_breaker.multiselect, id)
+			if ok_get and is_on then
+				enabled[#enabled + 1] = id
+			end
+		end
+		linkens_break_enabled_names = enabled
+		if save_to_config and Config and Config.WriteString then
+			Config.WriteString(ORDER_UI_CONFIG_NAME, "linkens_drag_order", table.concat(ids, ","))
+			Config.WriteString(ORDER_UI_CONFIG_NAME, "linkens_drag_enabled", table.concat(enabled, ","))
+		end
+	end
+
+	read_linkens_breaker(true)
+	if ui.linkens_breaker.multiselect and ui.linkens_breaker.multiselect.SetCallback then
+		ui.linkens_breaker.multiselect:SetCallback(function()
+			read_linkens_breaker(true)
+		end, true)
+	end
 end
 
 -- Fallback ordering UI: per-step dropdowns (always renders on all builds).
@@ -634,11 +718,6 @@ local function update_step_icons()
 	local t = now_time()
 	if (t - last_icon_update_t) < 0.20 then return end
 	last_icon_update_t = t
-	if ui.linkens_breaker and ui.linkens_breaker.Get and ui.linkens_breaker.Image then
-		local idx = ui.linkens_breaker:Get()
-		local name = LINKENS_BREAKER_ITEMS[(idx or 0) + 1]
-		pcall(ui.linkens_breaker.Image, ui.linkens_breaker, ICON_BY_NAME[name] or "")
-	end
 end
 
 local function normalize_list(v)
@@ -1355,6 +1434,7 @@ local function reset_combo()
 	step_trace = nil
 	last_success_cast_t = 0.0
 	pending_cooldown_confirm = nil
+	pending_linkens_break_confirm = nil
 	inventory_dump_logged = false
 end
 
@@ -1366,6 +1446,7 @@ local function start_combo(target)
 	step_trace = {}
 	last_success_cast_t = 0.0
 	pending_cooldown_confirm = nil
+	pending_linkens_break_confirm = nil
 	inventory_dump_logged = false
 	combo_running = true
 	combo_target = target
@@ -1514,10 +1595,38 @@ end
 local LINKENS_BREAK_GRACE_SECONDS = 0.60
 local last_linkens_break_t = -1000.0
 
+-- When we issue the Linken's breaker cast, wait until its cooldown actually starts
+-- before allowing the rest of the combo to proceed.
+local pending_linkens_break_confirm = nil
+
 local function target_has_linkens(target)
-	if not target or not NPC or not NPC.HasModifier then return false end
-	for _, m in ipairs(LINKENS_MODIFIERS) do
-		if NPC.HasModifier(target, m) then return true end
+	if not target or not NPC then return false end
+
+	-- Best-effort: Linken's can leave a passive modifier even while the spell block is on cooldown.
+	-- Prefer checking the actual item's cooldown when possible.
+	if NPC.GetItemByIndex and Ability and Ability.GetName then
+		for i = 0, 20 do
+			local item = NPC.GetItemByIndex(target, i)
+			if item then
+				local ok_n, nm = pcall(Ability.GetName, item)
+				if ok_n and nm == "item_sphere" then
+					-- If the item is ready (cooldown 0), the shield is considered active/available.
+					if Ability.IsReady then
+						local ok_r, ready = pcall(Ability.IsReady, item)
+						if ok_r then return ready == true end
+					end
+					local cd = get_cooldown_remaining_seconds(item)
+					return (cd == nil) or (cd <= 0.0)
+				end
+			end
+		end
+	end
+
+	-- Fallback: if we can't read item cooldown (e.g. Linken's buff from ally), rely on modifiers.
+	-- Note: we intentionally do NOT treat the generic passive "modifier_item_sphere" alone as proof of readiness.
+	if NPC.HasModifier then
+		if NPC.HasModifier(target, "modifier_item_sphere_target") then return true end
+		if NPC.HasModifier(target, "modifier_item_sphere_target_buff") then return true end
 	end
 	return false
 end
@@ -1598,12 +1707,11 @@ target_has_rod_root = function(target)
 	return false
 end
 
-local function get_linkens_breaker_spell()
-	if not ui.linkens_breaker then return nil end
-	local idx = ui.linkens_breaker:Get()
-	local name_id = LINKENS_BREAKER_ITEMS[(idx or 0) + 1]
-	if not name_id or name_id == "None" then return nil end
-	return spell_map[name_id]
+local function get_linkens_breaker_priority_ids()
+	if linkens_break_enabled_names and #linkens_break_enabled_names > 0 then
+		return linkens_break_enabled_names
+	end
+	return LINKENS_BREAK_ORDER_ITEMS
 end
 
 local function step_combo()
@@ -1716,33 +1824,102 @@ local function step_combo()
 		end
 	end
 
-	-- Linken's Sphere handling: if target has Linken's active, override combo to use a chosen breaker first.
-	local breaker = get_linkens_breaker_spell()
+	-- Linken's Sphere handling: if target has Linken's active, use breaker priority list first.
 	local has_linkens = target_has_linkens(combo_target)
-	if has_linkens and (now_time() - last_linkens_break_t) <= LINKENS_BREAK_GRACE_SECONDS then
-		has_linkens = false
-	end
-	local enforce_breaker = (not linkens_prefix_done) and has_linkens and (breaker ~= nil)
-	if enforce_breaker then
-		local ability = get_spell(hero, breaker)
-		if not ability then
-			log_debug("Linken's breaker missing: " .. tostring(breaker and breaker.name))
+	-- If Linken's is NOT currently active (on cooldown / already broken), do normal combo.
+	if not has_linkens then
+		pending_linkens_break_confirm = nil
+	else
+		local need_break = (pending_linkens_break_confirm ~= nil) or (not linkens_prefix_done)
+		if need_break then
+			local breaker_ids = get_linkens_breaker_priority_ids()
+			if not breaker_ids or #breaker_ids == 0 then
+				if ui.debug_logs:Get() then
+					log_debug("Linken's is active but breaker list is empty")
+				end
+				return STEP_BLOCKED
+			end
+
+		-- If we already issued the breaker cast, wait for cooldown to actually start.
+		if pending_linkens_break_confirm and pending_linkens_break_confirm.name then
+			local pending_spell = { name = pending_linkens_break_confirm.name, kind = "item", cast = "target" }
+			-- Map back to spell_map entry when possible (better for item/ability resolution).
+			for k, v in pairs(spell_map) do
+				if v and v.name == pending_linkens_break_confirm.name then
+					pending_spell = v
+					break
+				end
+			end
+			local ability = get_spell(hero, pending_spell)
+			if not ability then
+				pending_linkens_break_confirm = nil
+				return STEP_BLOCKED
+			end
+			local t_now = now_time()
+			if is_cooldown_started(ability) then
+				pending_linkens_break_confirm = nil
+				last_linkens_break_t = t_now
+				linkens_prefix_done = true
+				combo_idx = 1
+				if ui.debug_logs:Get() then
+					log_debug("Linken's breaker cooldown confirmed: " .. tostring(pending_spell and pending_spell.name))
+				end
+				return STEP_CAST
+			end
+			if t_now < (pending_linkens_break_confirm.next_try_t or t_now) then
+				next_cast_time = t_now + CAST_GAP_SECONDS
+				return STEP_BLOCKED
+			end
+			-- Cooldown still hasn't started; allow retrying.
+			pending_linkens_break_confirm = nil
+		end
+
+			-- Pick first available breaker we own/can cast; otherwise fall back to next.
+			local mana = (NPC and NPC.GetMana and NPC.GetMana(hero)) or 0.0
+			for _, name_id in ipairs(breaker_ids) do
+				local breaker_spell = spell_map[name_id]
+				if breaker_spell and breaker_spell.cast == "target" then
+					local ability = get_spell(hero, breaker_spell)
+					if ability then
+						-- If not ready/castable, try the next breaker in the hierarchy.
+						if (Ability and Ability.IsReady and Ability.IsReady(ability)) and (Ability and Ability.IsCastable and Ability.IsCastable(ability, mana)) then
+							local ok, reason = cast_fast(ability, breaker_spell, combo_target)
+							if ok then
+								local t_now = now_time()
+								if ui.debug_logs:Get() then
+									log_debug("Cast Linken's breaker (waiting cooldown): " .. tostring(breaker_spell and breaker_spell.name))
+								end
+								-- Do not continue until cooldown starts.
+								if not is_cooldown_started(ability) then
+									local cp = get_cast_point_seconds(ability)
+									local retry_delay = math.max(COOLDOWN_CONFIRM_GRACE, (cp + COOLDOWN_CONFIRM_EXTRA))
+									pending_linkens_break_confirm = {
+										name = breaker_spell and breaker_spell.name,
+										next_try_t = t_now + retry_delay,
+									}
+									next_cast_time = t_now + CAST_GAP_SECONDS
+									return STEP_BLOCKED
+								end
+								-- Cooldown is already visible.
+								pending_linkens_break_confirm = nil
+								last_linkens_break_t = t_now
+								linkens_prefix_done = true
+								combo_idx = 1
+								return STEP_CAST
+							end
+							if reason == "out_of_range" then
+								issue_move_to_target(hero, combo_target)
+								return STEP_BLOCKED
+							end
+							-- Other failure: try next breaker.
+						end
+					end
+				end
+			end
+
+			-- If Linken's is up but we have no usable breaker right now, do not proceed.
 			return STEP_BLOCKED
 		end
-		local ok, reason = cast_fast(ability, breaker, combo_target)
-		if ok then
-			log_debug("Cast Linken's breaker: " .. tostring(breaker and breaker.name))
-			last_linkens_break_t = now_time()
-			linkens_prefix_done = true
-			combo_idx = 1
-			return STEP_CAST
-		end
-		if reason == "out_of_range" then
-			issue_move_to_target(hero, combo_target)
-			return STEP_BLOCKED
-		end
-		-- Don't cast anything else while Linken's is up; wait for breaker to be ready/castable.
-		return STEP_BLOCKED
 	end
 
 	-- Optional: force Sheep Stick first (after Linken's is handled).
