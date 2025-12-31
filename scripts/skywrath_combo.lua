@@ -296,6 +296,64 @@ local spell_map = {
 	["Mystic Flare"] = {name = "skywrath_mage_mystic_flare", kind = "ability", cast = "position"},
 }
 
+-- Combo Order UI: draggable icon list (this drives the actual combo order).
+local ORDER_UI_CONFIG_NAME = "skywrath_combo"
+local combo_order_enabled_names = nil -- cached {"Arcane Bolt", ...} in chosen order
+
+local function split_csv(s)
+	if type(s) ~= "string" or s == "" then return {} end
+	local out = {}
+	for token in string.gmatch(s, "[^,]+") do
+		token = tostring(token):gsub("^%s+", ""):gsub("%s+$", "")
+		if token ~= "" then out[#out + 1] = token end
+	end
+	return out
+end
+
+local function list_to_set(list)
+	local set = {}
+	if type(list) ~= "table" then return set end
+	for _, v in ipairs(list) do
+		if v ~= nil then set[v] = true end
+	end
+	return set
+end
+
+local function resolve_multiselect_image_path(name_id)
+	-- MultiSelect imagePath works reliably with Panorama vtex_c assets.
+	local meta = spell_map[name_id]
+	if meta and meta.name then
+		if meta.kind == "item" then
+			local item_short = tostring(meta.name):gsub("^item_", "")
+			return "panorama/images/items/" .. item_short .. "_png.vtex_c"
+		elseif meta.kind == "ability" then
+			return "panorama/images/spellicons/" .. tostring(meta.name) .. "_png.vtex_c"
+		end
+	end
+	-- Fallback: custom local images (may not render in all widget contexts).
+	return ICON_BY_NAME[name_id] or ""
+end
+
+local function build_order_multiselect_items(order_list, enabled_set)
+	local items = {}
+	local seen = {}
+	local function push(name_id)
+		if not name_id or seen[name_id] then return end
+		seen[name_id] = true
+		-- API docs show MultiSelect items as tuple arrays: {nameId, imagePath, isEnabled}
+		items[#items + 1] = { name_id, resolve_multiselect_image_path(name_id), enabled_set[name_id] == true }
+	end
+	if type(order_list) == "table" then
+		for _, name_id in ipairs(order_list) do
+			push(name_id)
+		end
+	end
+	for _, name_id in ipairs(ORDER_ITEMS) do
+		push(name_id)
+	end
+	return items
+end
+
 local menu_tab = Menu.Create("General", "Scripts", "Skywrath Combo", "Combo")
 local main_group = menu_tab:Create("Settings")
 local order_group = menu_tab:Create("Combo Order")
@@ -311,6 +369,8 @@ ui.wait_rod_modifier = main_group:Switch("Wait Rod Root (Modifier)", false)
 ui.wait_eblade_modifier = main_group:Switch("Wait Ethereal Blade (Modifier)", false)
 
 ui.force_sheep_first = main_group:Switch("Force Sheep First", false)
+
+order_group:Label("Drag to reorder. Toggle entries to enable/disable. Combo uses the first " .. tostring(MAX_STEPS) .. " enabled entries.")
 
 -- Mystic Flare offset is hard-coded for fastest consistent combos:
 -- - Rod (or no Rod): 175
@@ -513,13 +573,59 @@ if ui.linkens_breaker and ui.linkens_breaker.Image then
 end
 
 -- Fallback ordering UI: per-step dropdowns (always renders on all builds).
-ui.order_steps = {}
-for i = 1, MAX_STEPS do
-	local default_name = DEFAULT_ORDER[i]
-	local default_idx = ORDER_INDEX[default_name] or 0
-	ui.order_steps[i] = order_group:Combo("Step " .. tostring(i), ORDER_ITEMS, default_idx)
-	if ui.order_steps[i] and ui.order_steps[i].Image then
-		pcall(ui.order_steps[i].Image, ui.order_steps[i], ICON_BY_NAME[default_name] or "")
+ui.combo_order = {}
+do
+	local saved_order = ""
+	local saved_enabled = ""
+	if Config and Config.ReadString then
+		saved_order = Config.ReadString(ORDER_UI_CONFIG_NAME, "combo_drag_order", "")
+		saved_enabled = Config.ReadString(ORDER_UI_CONFIG_NAME, "combo_drag_enabled", "")
+	end
+
+	local saved_order_list = split_csv(saved_order)
+	if #saved_order_list == 0 then
+		saved_order_list = DEFAULT_ORDER
+	end
+
+	local enabled_default = split_csv(saved_enabled)
+	if #enabled_default == 0 then
+		enabled_default = DEFAULT_ORDER
+	end
+	local enabled_set = list_to_set(enabled_default)
+
+	local items = build_order_multiselect_items(saved_order_list, enabled_set)
+	ui.combo_order.multiselect = order_group:MultiSelect("Drag Order", items, true)
+	if ui.combo_order.multiselect and ui.combo_order.multiselect.DragAllowed then
+		pcall(ui.combo_order.multiselect.DragAllowed, ui.combo_order.multiselect, true)
+	end
+
+	local function read_combo_order(save_to_config)
+		if not ui.combo_order.multiselect or not ui.combo_order.multiselect.List or not ui.combo_order.multiselect.Get then
+			return
+		end
+		local ok_list, ids = pcall(ui.combo_order.multiselect.List, ui.combo_order.multiselect)
+		if not ok_list or type(ids) ~= "table" then return end
+		local enabled = {}
+		for _, id in ipairs(ids) do
+			local ok_get, is_on = pcall(ui.combo_order.multiselect.Get, ui.combo_order.multiselect, id)
+			if ok_get and is_on then
+				enabled[#enabled + 1] = id
+			end
+		end
+		combo_order_enabled_names = enabled
+		if save_to_config and Config and Config.WriteString then
+			Config.WriteString(ORDER_UI_CONFIG_NAME, "combo_drag_order", table.concat(ids, ","))
+			Config.WriteString(ORDER_UI_CONFIG_NAME, "combo_drag_enabled", table.concat(enabled, ","))
+		end
+	end
+
+	-- Prime cache and persist any normalization.
+	read_combo_order(true)
+
+	if ui.combo_order.multiselect and ui.combo_order.multiselect.SetCallback then
+		ui.combo_order.multiselect:SetCallback(function()
+			read_combo_order(true)
+		end, true)
 	end
 end
 
@@ -533,14 +639,6 @@ local function update_step_icons()
 		local name = LINKENS_BREAKER_ITEMS[(idx or 0) + 1]
 		pcall(ui.linkens_breaker.Image, ui.linkens_breaker, ICON_BY_NAME[name] or "")
 	end
-	for i = 1, #ui.order_steps do
-		local w = ui.order_steps[i]
-		if w and w.Get and w.Image then
-			local idx = w:Get()
-			local name = ORDER_ITEMS[(idx or 0) + 1]
-			pcall(w.Image, w, ICON_BY_NAME[name] or "")
-		end
-	end
 end
 
 local function normalize_list(v)
@@ -549,17 +647,13 @@ local function normalize_list(v)
 end
 
 local function get_order_list()
-	if ui.order_steps and #ui.order_steps > 0 then
-		local list = {}
-		for i = 1, math.min(#ui.order_steps, MAX_STEPS) do
-			local w = ui.order_steps[i]
-			if w and w.Get then
-				local idx = w:Get()
-				local name = ORDER_ITEMS[(idx or 0) + 1]
-				if name then list[#list + 1] = name end
-			end
+	-- Preferred: draggable MultiSelect order.
+	if combo_order_enabled_names and #combo_order_enabled_names > 0 then
+		local out = {}
+		for i = 1, math.min(#combo_order_enabled_names, MAX_STEPS) do
+			out[#out + 1] = combo_order_enabled_names[i]
 		end
-		if #list > 0 then return list end
+		if #out > 0 then return out end
 	end
 	return DEFAULT_ORDER
 end
@@ -1099,11 +1193,15 @@ local function find_target_near_cursor()
 	local best, best_dist = nil, radius
 	for _, enemy in pairs(enemies) do
 		if enemy and Entity.IsAlive(enemy) and enemy ~= hero and Entity.GetTeamNum(enemy) ~= my_team then
-			local pos = Entity.GetAbsOrigin(enemy)
-			local dist = cursor:Distance(pos)
-			if dist < best_dist then
-				best_dist = dist
-				best = enemy
+			-- Skip targets with reflect/immune buffs we don't want to engage.
+			local forbidden = (target_is_forbidden ~= nil) and target_is_forbidden(enemy) or false
+			if not forbidden then
+				local pos = Entity.GetAbsOrigin(enemy)
+				local dist = cursor:Distance(pos)
+				if dist < best_dist then
+					best_dist = dist
+					best = enemy
+				end
 			end
 		end
 	end
@@ -1367,6 +1465,52 @@ local LINKENS_MODIFIERS = {
 	"modifier_item_sphere_target_buff",
 }
 
+-- If any of these are active, we refuse to target the enemy at all.
+-- Goal: never cast into reflect/dark pact/enrage/counterspell/debuff immunity.
+local FORBIDDEN_TARGET_MODIFIERS = {
+	-- Reflect / spell return
+	"modifier_item_lotus_orb_active",
+	-- Ursa
+	"modifier_ursa_enrage",
+	-- Slark
+	"modifier_slark_dark_pact",
+	"modifier_slark_dark_pact_pulses",
+	-- Anti-Mage
+	"modifier_antimage_counterspell",
+	"modifier_antimage_counterspell_active",
+	-- Common spell/debuff immunity sources (fallbacks if API checks are unavailable)
+	"modifier_black_king_bar_immune",
+	"modifier_item_black_king_bar_immune",
+	"modifier_item_minotaur_horn",
+	"modifier_life_stealer_rage",
+	"modifier_juggernaut_blade_fury",
+}
+
+target_is_forbidden = function(target)
+	if not target or not Entity or not Entity.IsAlive or not Entity.IsAlive(target) then return true end
+	-- Prefer broad API state checks when available.
+	if NPC then
+		if NPC.IsDebuffImmune then
+			local ok, v = pcall(NPC.IsDebuffImmune, target)
+			if ok and v then return true end
+		end
+		if NPC.IsMagicImmune then
+			local ok, v = pcall(NPC.IsMagicImmune, target)
+			if ok and v then return true end
+		end
+	end
+	if Entity and Entity.IsInvulnerable then
+		local ok, v = pcall(Entity.IsInvulnerable, target)
+		if ok and v then return true end
+	end
+	if NPC and NPC.HasModifier then
+		for _, m in ipairs(FORBIDDEN_TARGET_MODIFIERS) do
+			if NPC.HasModifier(target, m) then return true end
+		end
+	end
+	return false
+end
+
 local LINKENS_BREAK_GRACE_SECONDS = 0.60
 local last_linkens_break_t = -1000.0
 
@@ -1482,6 +1626,16 @@ local function step_combo()
 			log_debug("[STEP] Exit: BLOCKED (no target/not running)")
 		end
 		dbg_add_event("END", tostring(combo_idx), "no_target_or_dead", "")
+		reset_combo()
+		return STEP_BLOCKED
+	end
+
+	-- Abort if target becomes unsafe (Lotus/Enrage/Dark Pact/Counterspell/Immunity).
+	if target_is_forbidden and target_is_forbidden(combo_target) then
+		if should_log then
+			log_debug("[STEP] Exit: BLOCKED (target forbidden/immune)")
+		end
+		dbg_add_event("END", tostring(combo_idx), "target_forbidden", "")
 		reset_combo()
 		return STEP_BLOCKED
 	end
@@ -2036,7 +2190,14 @@ function combo.OnUpdate()
 			end
 		end
 		if target then
-			start_combo(target)
+			-- Do not start combos on forbidden/immune targets.
+			if target_is_forbidden and target_is_forbidden(target) then
+				if ui.debug_logs:Get() then
+					log_debug("Found target but skipped (forbidden/immune)")
+				end
+			else
+				start_combo(target)
+			end
 		else
 			issue_move_to_ground(hero, Input.GetWorldCursorPos())
 			if ui.debug_logs:Get() and cpu_start then
