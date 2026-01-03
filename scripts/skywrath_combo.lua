@@ -259,6 +259,7 @@ local LINKENS_BREAKER_ITEMS = {
 -- Linken's breaker priority list (only include direct target casts).
 local LINKENS_BREAK_ORDER_ITEMS = {
 	"Sheep Stick",
+	"Eul's / Wind Waker",
 	"Rod of Atos",
 	"Ancient Seal",
 	"Ethereal Blade",
@@ -301,6 +302,7 @@ local spell_map = {
 	["Concussive Shot"] = {name = "skywrath_mage_concussive_shot", kind = "ability", cast = "no_target"},
 	["Arcane Bolt"] = {name = "skywrath_mage_arcane_bolt", kind = "ability", cast = "target"},
 	["Sheep Stick"] = {name = "item_sheepstick", kind = "item", cast = "target"},
+	["Eul's / Wind Waker"] = {name = "item_cyclone", kind = "item", cast = "target"},
 	["Ethereal Blade"] = {name = "item_ethereal_blade", kind = "item", cast = "target"},
 	["Bloodthorn"] = {name = "item_bloodthorn", kind = "item", cast = "target"},
 	["Nullifier"] = {name = "item_nullifier", kind = "item", cast = "target"},
@@ -746,24 +748,61 @@ local function build_combo_sequence()
 	return seq
 end
 
+local function is_backpack_index(i)
+	-- Dota inventory slots are typically:
+	-- 0-5 = main inventory
+	-- 6-8 = backpack
+	-- (others exist: neutral/TP, etc)
+	return type(i) == "number" and i >= 6 and i <= 8
+end
+
 local function get_spell(owner, spell)
 	if spell.kind == "ability" then
-		return NPC.GetAbility(owner, spell.name)
+		return NPC.GetAbility(owner, spell.name), "ability"
 	end
+	local found_in_backpack = false
 	for i = 0, 20 do
 		local item = NPC.GetItemByIndex(owner, i)
 		if item then
 			local nm = Ability.GetName(item)
-			if nm == spell.name then return item end
+			local in_backpack = is_backpack_index(i)
+			if nm == spell.name then
+				if in_backpack then
+					found_in_backpack = true
+				else
+					return item, "inventory"
+				end
+			end
+			-- Treat Eul's Scepter and Wind Waker as the same step.
+			if spell.name == "item_cyclone" and nm == "item_wind_waker" then
+				if in_backpack then
+					found_in_backpack = true
+				else
+					return item, "inventory"
+				end
+			end
 			-- Treat Rod of Atos and its common upgraded variants as the same step.
 			-- Some Umbrella builds/logs refer to Gleipnir as "gungir".
 			if spell.name == "item_rod_of_atos" and (nm == "item_gleipnir" or nm == "item_gungir") then
-				return item
+				if in_backpack then
+					found_in_backpack = true
+				else
+					return item, "inventory"
+				end
 			end
-			if spell.name == "item_dagon" and nm and nm:find("^item_dagon") then return item end
+			if spell.name == "item_dagon" and nm and nm:find("^item_dagon") then
+				if in_backpack then
+					found_in_backpack = true
+				else
+					return item, "inventory"
+				end
+			end
 		end
 	end
-	return nil
+	if found_in_backpack then
+		return nil, "backpack"
+	end
+	return nil, "missing"
 end
 
 local function hero_has_item_name(hero, item_name)
@@ -2033,7 +2072,7 @@ local function step_combo()
 	local i = combo_idx
 	local spell = combo_seq[i]
 	trace_get_step(i, spell)
-	local ability = get_spell(hero, spell)
+	local ability, ability_loc = get_spell(hero, spell)
 	local resolved_name = nil
 	if ability and Ability and Ability.GetName then
 		local ok_n, nm = pcall(Ability.GetName, ability)
@@ -2041,14 +2080,19 @@ local function step_combo()
 	end
 	if not ability then
 		-- Missing items/spells are skipped.
-		trace_step_skip(i, spell, "missing")
+		local skip_reason = (ability_loc == "backpack") and "in_backpack" or "missing"
+		trace_step_skip(i, spell, skip_reason)
 		if ui.debug_logs:Get() then
 			local t = now_time()
-			if last_fail_reason ~= "missing" or last_fail_step ~= i or (t - last_fail_log_t) >= FAIL_LOG_COOLDOWN then
-				last_fail_reason = "missing"
+			if last_fail_reason ~= skip_reason or last_fail_step ~= i or (t - last_fail_log_t) >= FAIL_LOG_COOLDOWN then
+				last_fail_reason = skip_reason
 				last_fail_step = i
 				last_fail_log_t = t
-				log_debug("Skip step " .. tostring(i) .. ": missing " .. tostring(spell.name))
+				if ability_loc == "backpack" then
+					log_debug("Skip step " .. tostring(i) .. ": item is in backpack " .. tostring(spell.name))
+				else
+					log_debug("Skip step " .. tostring(i) .. ": missing " .. tostring(spell.name))
+				end
 			end
 		end
 		advance_idx()
