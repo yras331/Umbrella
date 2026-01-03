@@ -871,6 +871,11 @@ local function has_agh_effect(hero)
 		if NPC.HasModifier(hero, "modifier_item_ultimate_scepter") then return true end
 		if NPC.HasModifier(hero, "modifier_item_ultimate_scepter_consumed") then return true end
 		if NPC.HasModifier(hero, "modifier_item_ultimate_scepter_2") then return true end
+		-- Alchemist-granted Aghanim's Scepter (Aghanim's Blessing) can use hero modifiers
+		-- that are distinct from the item_* modifiers above depending on the patch/client.
+		if NPC.HasModifier(hero, "modifier_alchemist_aghanims_scepter") then return true end
+		if NPC.HasModifier(hero, "modifier_alchemist_aghanims_scepter_buff") then return true end
+		if NPC.HasModifier(hero, "modifier_item_ultimate_scepter_consumed_alchemist") then return true end
 	end
 	return false
 end
@@ -1076,7 +1081,75 @@ local flare_trace_logged = false
 local combo_end_logged = false
 local trace_version_logged = false
 
+-- One-time Aghanim detection debug (gated by Debug Logs).
+local agh_trace_logged = false
+
 local inventory_dump_logged = false
+
+-- Forward declaration: referenced by debug helpers defined before its implementation.
+local get_target_modifier_names
+
+local function dump_agh_status_once(hero, context)
+	if agh_trace_logged then return end
+	if not ui or not ui.debug_logs or not ui.debug_logs.Get or not ui.debug_logs:Get() then return end
+	if not hero or not NPC or not Ability or not NPC.GetItemByIndex or not Ability.GetName then return end
+	agh_trace_logged = true
+
+	local has_agh = has_agh_effect(hero)
+	log_debug(string.format("[AGH CHECK] ctx=%s has_agh=%s", tostring(context), tostring(has_agh)))
+
+	-- Inventory signals (covers purchased/roshan scepter).
+	local scepter_items = {}
+	for i = 0, 20 do
+		local item = NPC.GetItemByIndex(hero, i)
+		if item then
+			local ok_n, nm = pcall(Ability.GetName, item)
+			if ok_n and type(nm) == "string" and nm:find("ultimate_scepter", 1, true) then
+				scepter_items[#scepter_items + 1] = nm
+			end
+		end
+	end
+	if #scepter_items > 0 then
+		log_debug("[AGH CHECK] inventory: " .. table.concat(scepter_items, " | "))
+	else
+		log_debug("[AGH CHECK] inventory: (no scepter items)")
+	end
+
+	-- Known Agh-related modifiers we explicitly check for.
+	local matched = {}
+	if NPC.HasModifier then
+		local CANDIDATES = {
+			"modifier_item_ultimate_scepter",
+			"modifier_item_ultimate_scepter_consumed",
+			"modifier_item_ultimate_scepter_2",
+			"modifier_item_ultimate_scepter_consumed_alchemist",
+			"modifier_alchemist_aghanims_scepter",
+			"modifier_alchemist_aghanims_scepter_buff",
+		}
+		for _, m in ipairs(CANDIDATES) do
+			if NPC.HasModifier(hero, m) then
+				matched[#matched + 1] = m
+			end
+		end
+	end
+	if #matched > 0 then
+		log_debug("[AGH CHECK] matched_modifiers: " .. table.concat(matched, " | "))
+	else
+		log_debug("[AGH CHECK] matched_modifiers: (none)")
+	end
+
+	-- Full modifier snapshot (helps identify the exact Alchemist-gift modifier name on this client).
+	if type(get_target_modifier_names) == "function" then
+		local names = get_target_modifier_names(hero, 32)
+		if names and #names > 0 then
+			log_debug("[AGH CHECK] hero modifiers: " .. table.concat(names, " | "))
+		else
+			log_debug("[AGH CHECK] hero modifiers: (none/unknown)")
+		end
+	else
+		log_debug("[AGH CHECK] hero modifiers: (helper_unavailable)")
+	end
+end
 
 local function dump_inventory_once(hero)
 	if inventory_dump_logged then return end
@@ -1158,6 +1231,7 @@ cast_fast = function(ability, spell, target)
 		end
 		if ui and ui.debug_logs and ui.debug_logs.Get and ui.debug_logs:Get() and (not flare_trace_logged) and spell and spell.name == "skywrath_mage_mystic_flare" then
 			flare_trace_logged = true
+			dump_agh_status_once(hero, "mystic_flare")
 			local hero_pos = Entity.GetAbsOrigin(hero)
 			local target_pos = (flare_dbg and flare_dbg.target_pos) or Entity.GetAbsOrigin(target)
 			local r = (flare_dbg and flare_dbg.r) or get_mystic_flare_radius(hero, ability)
@@ -1425,6 +1499,7 @@ local function reset_combo()
 	last_fail_log_t = 0.0
 	combo_cycle_logged = false
 	flare_trace_logged = false
+	agh_trace_logged = false
 	combo_end_logged = false
 	trace_version_logged = false
 	combo_start_t = 0.0
@@ -1474,6 +1549,7 @@ local function start_combo(target)
 	last_fail_log_t = 0.0
 	combo_cycle_logged = false
 	flare_trace_logged = false
+	agh_trace_logged = false
 	combo_end_logged = false
 	if ui and ui.debug_logs and ui.debug_logs.Get and ui.debug_logs:Get() and (not trace_version_logged) then
 		trace_version_logged = true
@@ -1680,7 +1756,7 @@ local function get_rod_root_modifier_name(target)
 	return nil
 end
 
-local function get_target_modifier_names(target, max_items)
+get_target_modifier_names = function(target, max_items)
 	if not target or not NPC or not NPC.GetModifiers or not Modifier or not Modifier.GetName then return nil end
 	local ok, mods = pcall(NPC.GetModifiers, target)
 	if not ok or type(mods) ~= "table" then return nil end
