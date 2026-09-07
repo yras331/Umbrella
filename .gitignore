@@ -1,0 +1,32 @@
+# --- Editor / IDE ---
+.vscode/
+
+# --- Loader binaries & archives ---
+*.dll
+*.exe
+*.zip
+*.mdmp
+
+# --- Runtime data, configs & logs ---
+*.log
+db.json
+dota.be
+gui.ini
+gui.json
+hwid.log
+inventory.json
+local_cache.json
+spoofer.log
+steam_module.log
+trace.log
+
+# --- Runtime asset / generated folders ---
+assets/
+configs/
+crash_logs/
+dota_assets/
+fonts/
+images/
+localizer/
+localizer_deadlock/
+themes/

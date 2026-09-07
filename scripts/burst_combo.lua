@@ -1,6 +1,6 @@
 ---@diagnostic disable: undefined-global
 
-local combo = {}
+local burst_combo = {}
 
 -- Forward-declare UI table so helper functions can reference it.
 local ui
@@ -311,7 +311,7 @@ local spell_map = {
 }
 
 -- Combo Order UI: draggable icon list (this drives the actual combo order).
-local ORDER_UI_CONFIG_NAME = "skywrath_combo"
+local ORDER_UI_CONFIG_NAME = "burst_combo"
 local combo_order_enabled_names = nil -- cached {"Arcane Bolt", ...} in chosen order
 
 local linkens_break_enabled_names = nil -- cached {"Dagon", ...} in chosen priority order
@@ -389,7 +389,7 @@ local function build_linkens_break_multiselect_items(order_list, enabled_set)
 	return items
 end
 
-local menu_tab = Menu.Create("General", "Scripts", "Skywrath Combo", "Combo")
+local menu_tab = Menu.Create("General", "My Scripts", "Burst Combo", "Combo")
 local main_group = menu_tab:Create("Settings")
 local order_group = menu_tab:Create("Combo Order")
 local linkens_group = menu_tab:Create("Linken's Breaker")
@@ -412,7 +412,9 @@ order_group:Label("Drag to reorder. Toggle entries to enable/disable. Combo uses
 -- - Rod (or no Rod): 175
 -- - Gungir: 250
 
-local SCRIPT_TAG = "[Skywrath Combo]"
+local SCRIPT_TAG = "[Burst Combo]"
+Log.Write(SCRIPT_TAG .. " Loaded")
+
 local function log_debug(msg)
 	if not ui.debug_logs:Get() then return end
 	if Log and Log.Write then
@@ -594,7 +596,7 @@ local function stop_hero_orders()
 			false,
 			false,
 			true,
-			"skywrath_combo_stop",
+			"burst_combo_stop",
 			true
 		)
 	end
@@ -1631,7 +1633,7 @@ local function issue_move_to_target(hero, target)
 	last_move_order_t = t
 	moving_to_target = true
 	if NPC and NPC.MoveTo then
-		NPC.MoveTo(hero, Entity.GetAbsOrigin(target), false, false, false, true, "skywrath_combo_move", true)
+		NPC.MoveTo(hero, Entity.GetAbsOrigin(target), false, false, false, true, "burst_combo_move", true)
 	end
 	log_debug("Move toward target")
 end
@@ -1649,7 +1651,7 @@ local function issue_move_to_ground(hero, pos)
 	last_ground_pos = pos
 	moving_to_target = false
 	if NPC and NPC.MoveTo then
-		NPC.MoveTo(hero, pos, false, false, false, true, "skywrath_combo_ground", true)
+		NPC.MoveTo(hero, pos, false, false, false, true, "burst_combo_ground", true)
 	end
 	log_debug("Move to cursor")
 end
@@ -2435,7 +2437,7 @@ local function step_combo()
 	return STEP_BLOCKED
 end
 
-function combo.OnUpdate()
+function burst_combo.OnUpdate()
 	if not ui.enabled:Get() then return end
 
 	local t = now_time()
@@ -2618,7 +2620,7 @@ function combo.OnUpdate()
 	was_key_down = true
 end
 
-function combo.OnDraw()
+function burst_combo.OnDraw()
 	if not ui.enabled:Get() then return end
 	local key = ui.combo_key:Get()
 	if key == Enum.ButtonCode.BUTTON_CODE_INVALID then return end
@@ -2631,4 +2633,4 @@ function combo.OnDraw()
 	end
 end
 
-return combo
+return burst_combo
